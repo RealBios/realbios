@@ -1,0 +1,52 @@
+name: Build images index
+on:
+  push:
+    paths:
+      - 'public/images/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-index:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Generate public/images/_index.json
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const dir = 'public/images';
+          const exts = new Set(['.jpg','.jpeg','.png','.gif','.webp','.avif','.svg']);
+          function walk(p){
+            let out=[];
+            for(const e of fs.readdirSync(p,{withFileTypes:true})){
+              const full=path.join(p,e.name);
+              if(e.isDirectory()) out=out.concat(walk(full));
+              else if(exts.has(path.extname(e.name).toLowerCase())) out.push(full.replace(/^public\\//,''));
+            }
+            return out;
+          }
+          const files = fs.existsSync(dir) ? walk(dir) : [];
+          const list = files.sort().map(src => ({ src, title: path.parse(src).name }));
+          fs.mkdirSync('public/images', { recursive:true });
+          fs.writeFileSync('public/images/_index.json', JSON.stringify(list, null, 2));
+          console.log('Wrote', list.length, 'entries');
+          NODE
+
+      - name: Commit updated index
+        run: |
+          if git status --porcelain | grep -q 'public/images/_index.json'; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add public/images/_index.json
+            git commit -m "chore: update images/_index.json [skip ci]"
+            git push
+          else
+            echo "No changes to commit."
+          fi
