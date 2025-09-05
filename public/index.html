@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>My Gallery</title>
+  <meta name="description" content="Simple, fast, responsive image gallery" />
+  <meta property="og:title" content="My Gallery" />
+  <meta property="og:type" content="website" />
+  <meta property="og:description" content="Simple, fast, responsive image gallery" />
+  <meta property="og:image" content="images/og-sample.jpg" />
+  <style>
+    :root { --bg:#0b0b10; --fg:#fafafa; --muted:#a8a8b3; --card:#141420; }
+    * { box-sizing:border-box; }
+    html, body { height:100%; }
+    body {
+      margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+      background:var(--bg); color:var(--fg);
+    }
+    header { padding:28px 16px 8px; text-align:center; }
+    header h1 { margin:0 0 6px; font-size:clamp(20px, 4vw, 32px); letter-spacing:0.02em; }
+    header p { margin:0; color:var(--muted); font-size:14px; }
+    .container { width:min(1200px, 100%); margin:0 auto; padding:20px 16px 60px; }
+
+    .toolbar { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin:8px 0 18px; }
+    .search { flex:1 1 260px; }
+    .search input { width:100%; padding:10px 12px; border:1px solid #252538; background:#101018; color:var(--fg); border-radius:10px; }
+    .counter { color:var(--muted); font-size:13px; }
+
+    .gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
+    .card { position:relative; overflow:hidden; border-radius:16px; background:var(--card); box-shadow: 0 6px 18px rgba(0,0,0,.28); }
+    .card img { width:100%; height:220px; object-fit:cover; display:block; background:#0e0e16; }
+    .card figcaption { position:absolute; left:0; right:0; bottom:0; padding:10px 12px; font-size:12px; color:#d6d6e2; background: linear-gradient(to top, rgba(0,0,0,.55), transparent); text-shadow:0 1px 1px rgba(0,0,0,.6); }
+    .card button { all:unset; position:absolute; inset:0; cursor:pointer; }
+
+    dialog#lightbox { border:none; padding:0; border-radius:12px; color:var(--fg); background:#0b0b0f; max-width: min(92vw, 1400px); }
+    dialog::backdrop { background: rgba(2, 2, 6, .85); }
+    .lightbox-wrap { position:relative; }
+    .lightbox-img { display:block; max-width: min(92vw, 1400px); max-height: 85vh; width:auto; height:auto; margin:0; object-fit:contain; background:#0b0b10; }
+    .lb-ui { position:absolute; inset:0; pointer-events:none; display:flex; align-items:center; justify-content:space-between; padding:8px; }
+    .lb-ui .spacer { flex:1; }
+    .lb-btn { pointer-events:auto; border:none; background:rgba(0,0,0,.5); color:white; width:40px; height:40px; border-radius:999px; font-size:18px; display:grid; place-items:center; cursor:pointer; }
+    .lb-btn:hover { background:rgba(0,0,0,.7); }
+    .lb-caption { position:absolute; left:0; right:0; bottom:0; padding:10px 12px; color:#ddd; font-size:13px; background: linear-gradient(to top, rgba(0,0,0,.7), transparent); }
+
+    footer { text-align:center; color:var(--muted); font-size:12px; padding:24px 0 36px; }
+    .empty { text-align:center; color:var(--muted); padding:40px 0; }
+    .spinner { display:inline-block; width:20px; height:20px; border:3px solid rgba(255,255,255,.15); border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>My Gallery</h1>
+    <p>画像を <code>public/images/</code> にアップするだけ。JSON自動生成 or R2連携で一覧化します。</p>
+  </header>
+
+  <div class="container">
+    <div class="toolbar">
+      <div class="search"><input id="q" type="search" placeholder="タイトルで絞り込み (例: portrait, landscape)" aria-label="検索"></div>
+      <div class="counter" id="count"></div>
+    </div>
+
+    <section class="gallery" id="gallery" aria-live="polite"></section>
+    <div class="empty" id="empty" hidden>画像が見つかりませんでした。</div>
+  </div>
+
+  <dialog id="lightbox" aria-label="拡大画像">
+    <div class="lightbox-wrap">
+      <img id="lbImg" class="lightbox-img" alt="" />
+      <div class="lb-ui">
+        <button class="lb-btn" id="prev" title="前へ" aria-label="前へ">&#x276E;</button>
+        <div class="spacer"></div>
+        <button class="lb-btn" id="next" title="次へ" aria-label="次へ">&#x276F;</button>
+      </div>
+      <div class="lb-caption" id="lbCap"></div>
+    </div>
+  </dialog>
+
+  <script>
+    // ▼ フォールバック（自動一覧が使えない場合のみ手動列挙）
+    const fallbackFiles = [
+      // 'images/sample-01.jpg',
+      // 'images/sample-02.jpg',
+    ];
+
+    // JSON あるいは API から画像リストを取得 → 失敗したらフォールバック
+    async function loadImages() {
+      const sources = [
+        'images/_index.json', // GitHub Actions で自動生成
+        '/api/images'         // Cloudflare Pages Functions + R2
+      ];
+      for (const url of sources) {
+        try {
+          const res = await fetch(url, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data) && data.length) return normalize(data);
+          }
+        } catch (e) {}
+      }
+      return normalize(fallbackFiles);
+    }
+
+    function normalize(list) {
+      return list.map(item => {
+        if (typeof item === 'string') return { src: item, title: '' };
+        if (item && typeof item === 'object') return { src: item.src, title: item.title || '' };
+        return null;
+      }).filter(Boolean);
+    }
+
+    const gallery = document.getElementById('gallery');
+    const empty = document.getElementById('empty');
+    const q = document.getElementById('q');
+    const count = document.getElementById('count');
+
+    function render(list) {
+      gallery.innerHTML = '';
+      if (!list.length) { empty.hidden = false; count.textContent = '0 件'; return; }
+      empty.hidden = true;
+      const frag = document.createDocumentFragment();
+      list.forEach((item, idx) => {
+        const fig = document.createElement('figure');
+        fig.className = 'card';
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.alt = item.title || '';
+        img.src = item.src;
+        const cap = document.createElement('figcaption');
+        cap.textContent = item.title || '';
+        const btn = document.createElement('button');
+        btn.addEventListener('click', () => openLightbox(idx, list));
+        fig.append(img, cap, btn); frag.append(fig);
+      });
+      gallery.append(frag);
+      count.textContent = `${list.length} 件`;
+    }
+
+    function filter(list) {
+      const term = (q.value || '').toLowerCase();
+      return list.filter(i => (i.title || i.src).toLowerCase().includes(term));
+    }
+
+    q.addEventListener('input', async () => {
+      const filtered = filter(currentList);
+      render(filtered);
+    });
+
+    // Lightbox
+    const dialog = document.getElementById('lightbox');
+    const lbImg = document.getElementById('lbImg');
+    const lbCap = document.getElementById('lbCap');
+    let currentIndex = 0, currentList = [];
+
+    function openLightbox(idx, list) {
+      currentIndex = idx; currentList = list; updateLB(); dialog.showModal();
+    }
+    function updateLB() {
+      const item = currentList[currentIndex];
+      lbImg.src = item.src; lbImg.alt = item.title || '';
+      lbCap.textContent = item.title || '';
+    }
+    function step(delta) {
+      if (!currentList.length) return;
+      currentIndex = (currentIndex + delta + currentList.length) % currentList.length; updateLB();
+    }
+
+    document.getElementById('prev').addEventListener('click', () => step(-1));
+    document.getElementById('next').addEventListener('click', () => step(1));
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    window.addEventListener('keydown', (e) => {
+      if (!dialog.open) return;
+      if (e.key === 'Escape') dialog.close();
+      if (e.key === 'ArrowRight') step(1);
+      if (e.key === 'ArrowLeft') step(-1);
+    });
+
+    // 初期ロード
+    (async () => {
+      // ローディング表示
+      count.innerHTML = '<span class="spinner" aria-hidden="true"></span> 読み込み中…';
+      const list = await loadImages();
+      currentList = list;
+      render(currentList);
+      count.textContent = `${currentList.length} 件`;
+    })();
+  </script>
+
+  <footer>
+    <small>© <span id="year"></span> My Gallery</small>
+  </footer>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
