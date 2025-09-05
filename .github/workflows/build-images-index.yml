@@ -3,8 +3,6 @@ on:
   push:
     paths:
       - 'public/images/**'
-    paths-ignore:
-      - 'public/images/_index.json'
   workflow_dispatch:
 
 permissions:
@@ -12,35 +10,47 @@ permissions:
 
 jobs:
   build-index:
+    # bot がコミットした push ではジョブをスキップしてループ抑制
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
-      # （任意）Nodeのバージョンを固定したい場合は有効化
+      # （任意）Nodeを固定したい場合は有効化
       # - uses: actions/setup-node@v4
-      #   with: { node-version: '20' }
+      #   with:
+      #     node-version: '20'
 
       - name: Generate public/images/_index.json
         run: |
           node - <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const dir = 'public/images';
+
+          const ROOT = 'public';
+          const DIR  = 'public/images';
           const exts = new Set(['.jpg','.jpeg','.png','.gif','.webp','.avif','.svg']);
+
           function walk(p){
             let out=[];
-            for(const e of fs.readdirSync(p,{withFileTypes:true})){
-              const full=path.join(p,e.name);
-              if(e.isDirectory()) out=out.concat(walk(full));
-              else if(exts.has(path.extname(e.name).toLowerCase()))
-                out.push(full.replace(/^public\//,'')); // ← ここを修正！
+            for (const e of fs.readdirSync(p, { withFileTypes:true })) {
+              const full = path.join(p, e.name);
+              if (e.isDirectory()) out = out.concat(walk(full));
+              else if (exts.has(path.extname(e.name).toLowerCase())) {
+                // public からの相対パスにして URL 用に '/' 区切りへ
+                const rel = path.relative(ROOT, full);
+                const web = rel.split(path.sep).join('/');
+                out.push(web); // => 'images/...'
+              }
             }
             return out;
           }
-          const files = fs.existsSync(dir) ? walk(dir) : [];
-          const list = files.sort().map(src => ({ src, title: path.parse(src).name }));
+
+          const files = fs.existsSync(DIR) ? walk(DIR) : [];
+          const list  = files.sort().map(src => ({ src, title: path.parse(src).name }));
+
           fs.mkdirSync('public/images', { recursive:true });
           fs.writeFileSync('public/images/_index.json', JSON.stringify(list, null, 2));
           console.log('Wrote', list.length, 'entries');
