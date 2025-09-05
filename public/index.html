@@ -86,10 +86,7 @@
 
     // JSON あるいは API から画像リストを取得 → 失敗したらフォールバック
     async function loadImages() {
-      const sources = [
-        'images/_index.json', // GitHub Actions で自動生成
-        '/api/images'         // Cloudflare Pages Functions + R2
-      ];
+      const sources = ['/images/_index.json', '/api/images'];
       for (const url of sources) {
         try {
           const res = await fetch(url, { cache: 'no-store' });
